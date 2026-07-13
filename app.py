@@ -116,4 +116,27 @@ if uploaded_files and start_date <= end_date:
         
         status_text.text("扫描完成，正在生成结果...")
         
-        # 将结果存入 session_state
+        # 将结果存入 session_state 缓存中
+        if data_frames:
+            final_combined_df = pd.concat(data_frames, ignore_index=True)
+            # 统一输出为带有 BOM 的 UTF-8，确保 Windows Excel 强行以 UTF-8 渲染，杜绝二次乱码
+            st.session_state.processed_csv = final_combined_df.to_csv(index=False, encoding='utf-8-sig')
+            st.session_state.output_filename = f"Combined_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
+            st.session_state.result_msg = f"🎉 处理完成！共成功合并了 {len(final_combined_df)} 条数据。"
+            st.session_state.result_status = 'success'
+        else:
+            st.session_state.processed_csv = None
+            st.session_state.result_msg = f"❌ 未找到符合 {start_date} 至 {end_date} 的数据。"
+            st.session_state.result_status = 'error'
+
+# --- 4. 独立于按钮之外的结果展示区 (依赖缓存) ---
+if st.session_state.result_status == 'success':
+    st.success(st.session_state.result_msg)
+    st.download_button(
+        label="⬇️ 下载合并后的 CSV 文件",
+        data=st.session_state.processed_csv,
+        file_name=st.session_state.output_filename,
+        mime="text/csv"
+    )
+elif st.session_state.result_status == 'error':
+    st.error(st.session_state.result_msg)
