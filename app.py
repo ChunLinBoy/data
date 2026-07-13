@@ -119,8 +119,12 @@ if uploaded_files and start_date <= end_date:
         # 将结果存入 session_state 缓存中
         if data_frames:
             final_combined_df = pd.concat(data_frames, ignore_index=True)
+            # 正确的做法：先生成纯文本，再手动强制编码成带 BOM 的二进制流，欺骗 Windows Excel
+            csv_str = final_combined_df.to_csv(index=False)
+            st.session_state.processed_csv = csv_str.encode('utf-8-sig')
+            
             # 统一输出为带有 BOM 的 UTF-8，确保 Windows Excel 强行以 UTF-8 渲染，杜绝二次乱码
-            st.session_state.processed_csv = final_combined_df.to_csv(index=False, encoding='utf-8-sig')
+            # st.session_state.processed_csv = final_combined_df.to_csv(index=False, encoding='utf-8-sig')
             st.session_state.output_filename = f"Combined_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
             st.session_state.result_msg = f"🎉 处理完成！共成功合并了 {len(final_combined_df)} 条数据。"
             st.session_state.result_status = 'success'
