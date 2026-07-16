@@ -29,16 +29,14 @@ with col2:
 if start_date > end_date:
     st.error("❌ 错误：开始日期不能晚于结束日期，请重新选择！")
 
-# --- 2. 达人白名单上传 (新增功能，设为可选) ---
+# --- 2. 达人白名单上传 ---
 st.subheader("2. 上传达人筛选名单 (可选)")
 st.write("请上传包含 `amazon id` 列的文件（支持 CSV 或 Excel）。**如果不上传，系统将跳过达人比对，仅执行日期过滤。**")
 whitelist_file = st.file_uploader("选择达人名单文件 (非必填)", type=['csv', 'xlsx'])
 
-# 解析白名单并提取 Amazon ID 集合
 valid_creators_set = set()
 if whitelist_file:
     try:
-        # 判断是 CSV 还是 Excel 并读取
         if whitelist_file.name.endswith('.csv'):
             wl_df = None
             for enc in ['utf-8-sig', 'gbk', 'utf-8', 'gb18030']:
@@ -72,9 +70,8 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# 核心处理函数 (增加了达人筛选逻辑)
-def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_whitelist):
-    """严格编码检测 + 日期过滤 + 达人筛选"""
+# 核心处理函数 (新增 log_area 参数用于在网页打印日志)
+def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_whitelist, log_area):
     encodings_to_try = ['utf-8', 'gbk', 'gb18030', 'utf-8-sig', 'latin1']
     df = None
     
@@ -86,32 +83,28 @@ def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_white
             continue 
             
     if df is None:
-        st.warning(f"❌ 读取失败 {display_name}: 无法识别文件编码。")
+        log_area.error(f"❌ 读取失败 {display_name}: 无法识别文件编码。")
         return None
 
     try:
-        # 清理列名两端的空格
         df.columns = df.columns.str.strip()
         
         # 步骤 A：检查并执行日期过滤
         if 'Date' in df.columns:
-            # 1. 强行将整列转为字符串，并擦除所有头尾的隐形空格和换行符
             clean_date_str = df['Date'].astype(str).str.strip()
-            
-            # 2. 增加 format='mixed' 让 Pandas 聪明地混读数字和英文文本
             df['Date_Parsed'] = pd.to_datetime(clean_date_str, format='mixed', errors='coerce')
             mask = (df['Date_Parsed'] >= start_ts) & (df['Date_Parsed'] <= end_ts)
             filtered_df = df.loc[mask].copy()
             
             if filtered_df.empty:
+                log_area.caption(f"⚪ 跳过 {display_name}: 日期不符。")
                 return None
         else:
-            st.warning(f"⚠️ {display_name} 中未找到 'Date' 列，已跳过。")
+            log_area.warning(f"⚠️ 跳过 {display_name}: 未找到 'Date' 列。")
             return None
 
-        # 步骤 B：执行达人名称筛选 (如果用户上传了白名单)
+        # 步骤 B：执行达人名称筛选
         if creators_whitelist:
-            # 寻找 Creator Name 列 (忽略大小写进行匹配)
             creator_col = None
             for col in filtered_df.columns:
                 if col.lower() == 'creator name':
@@ -119,28 +112,30 @@ def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_white
                     break
             
             if creator_col:
-                # 将数据表中的 creator name 转为字符串并去空格，判断是否在白名单集合中
                 mask_creator = filtered_df[creator_col].astype(str).str.strip().isin(creators_whitelist)
                 filtered_df = filtered_df.loc[mask_creator].copy()
                 
                 if filtered_df.empty:
+                    log_area.caption(f"⚪ 跳过 {display_name}: 达人未匹配。")
                     return None
             else:
-                st.warning(f"⚠️ {display_name} 中未找到 'Creator Name' 列，无法进行达人匹配，已跳过该表。")
+                log_area.warning(f"⚠️ 跳过 {display_name}: 未找到 'Creator Name' 列。")
                 return None
 
         # 整理最终返回的数据
         filtered_df['Source_File'] = display_name
         filtered_df = filtered_df.drop(columns=['Date_Parsed']) 
+        
+        # 打印成功日志到网页面板
+        log_area.success(f"✅ 提取成功: **{display_name}** (找到 **{len(filtered_df)}** 条数据)")
         return filtered_df
         
     except Exception as e:
-        st.error(f"处理 {display_name} 内容时出错: {e}")
+        log_area.error(f"❌ 处理 {display_name} 内容时出错: {e}")
     return None
 
 # --- 4. 开始处理按钮逻辑 ---
 if uploaded_files and start_date <= end_date:
-    # 如果用户没有上传白名单，给出提示
     if not valid_creators_set:
         st.info("ℹ️ 尚未上传达人名单，系统将仅进行【日期过滤】。")
 
@@ -150,11 +145,15 @@ if uploaded_files and start_date <= end_date:
         status_text = st.empty()
         total_files = len(uploaded_files)
         
+        # 创建一个可折叠的日志展示区
+        st.markdown("### 📋 详细处理日志")
+        log_area = st.expander("点击查看文件扫描详情", expanded=True)
+        
         start_ts = pd.Timestamp(start_date)
         end_ts = pd.Timestamp(end_date)
         
         for i, file in enumerate(uploaded_files):
-            status_text.text(f"正在处理: {file.name}...")
+            status_text.text(f"正在处理: {file.name} ({i+1}/{total_files})...")
             file_bytes = file.read()
             
             if file.name.endswith('.zip'):
@@ -165,15 +164,15 @@ if uploaded_files and start_date <= end_date:
                                 member_bytes = z.read(member)
                                 display_name = f"{file.name} -> {member.split('/')[-1]}"
                                 filtered_df = process_csv_bytes(
-                                    member_bytes, display_name, start_ts, end_ts, valid_creators_set
+                                    member_bytes, display_name, start_ts, end_ts, valid_creators_set, log_area
                                 )
                                 if filtered_df is not None:
                                     data_frames.append(filtered_df)
                 except Exception as e:
-                    st.error(f"解压 {file.name} 失败: {e}")
+                    log_area.error(f"❌ 解压 {file.name} 失败: {e}")
             elif file.name.endswith('.csv'):
                 filtered_df = process_csv_bytes(
-                    file_bytes, file.name, start_ts, end_ts, valid_creators_set
+                    file_bytes, file.name, start_ts, end_ts, valid_creators_set, log_area
                 )
                 if filtered_df is not None:
                     data_frames.append(filtered_df)
@@ -184,8 +183,6 @@ if uploaded_files and start_date <= end_date:
         
         if data_frames:
             final_combined_df = pd.concat(data_frames, ignore_index=True)
-            
-            # 手动添加 BOM 强行规避 Excel 乱码
             csv_str = final_combined_df.to_csv(index=False)
             st.session_state.processed_csv = csv_str.encode('utf-8-sig')
             
