@@ -95,7 +95,11 @@ def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_white
         
         # 步骤 A：检查并执行日期过滤
         if 'Date' in df.columns:
-            df['Date_Parsed'] = pd.to_datetime(df['Date'], errors='coerce')
+            # 1. 强行将整列转为字符串，并擦除所有头尾的隐形空格和换行符
+            clean_date_str = df['Date'].astype(str).str.strip()
+            
+            # 2. 增加 format='mixed' 让 Pandas 聪明地混读数字和英文文本
+            df['Date_Parsed'] = pd.to_datetime(clean_date_str, format='mixed', errors='coerce')
             mask = (df['Date_Parsed'] >= start_ts) & (df['Date_Parsed'] <= end_ts)
             filtered_df = df.loc[mask].copy()
             
