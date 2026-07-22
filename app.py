@@ -15,6 +15,10 @@ if 'processed_csv' not in st.session_state:
     st.session_state.output_filename = ""
     st.session_state.result_msg = ""
     st.session_state.result_status = "" 
+    # 新增汇总数据的缓存
+    st.session_state.total_clicks = 0
+    st.session_state.total_orders = 0
+    st.session_state.total_sales = 0.0
 
 # --- 1. 自定义时间选择器 ---
 st.subheader("1. 选择需要过滤的时间范围")
@@ -183,11 +187,31 @@ if uploaded_files and start_date <= end_date:
         
         if data_frames:
             final_combined_df = pd.concat(data_frames, ignore_index=True)
+            
+            # === 新增：清理数据格式 ===
+            # 定义需要汇总的列名
+            summary_cols = ['Clicks', 'Orders', 'Sales']
+            for col in summary_cols:
+                if col in final_combined_df.columns:
+                    # 使用正则只保留数字、小数点和负号，过滤掉美元符号和逗号，然后强制转为数字，无法转换的变为 NaN，最后补0
+                    cleaned_col = final_combined_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
+                    final_combined_df[col] = pd.to_numeric(cleaned_col, errors='coerce').fillna(0)
+                else:
+                    # 如果某列完全不存在，为了防止报错，补齐一列 0
+                    final_combined_df[col] = 0
+            
+            # === 修改点：只对大于 0 的正数进行求和（忽略负数） ===
+            # loc[条件, 列名] 可以精准筛选出符合条件的数据再求和
+            st.session_state.total_clicks = int(final_combined_df.loc[final_combined_df['Clicks'] > 0, 'Clicks'].sum())
+            st.session_state.total_orders = int(final_combined_df.loc[final_combined_df['Orders'] > 0, 'Orders'].sum())
+            st.session_state.total_sales = float(final_combined_df.loc[final_combined_df['Sales'] > 0, 'Sales'].sum())
+            # ====================================================
+            
             csv_str = final_combined_df.to_csv(index=False)
             st.session_state.processed_csv = csv_str.encode('utf-8-sig')
             
             st.session_state.output_filename = f"Filtered_Data_{start_date.strftime('%m%d')}-{end_date.strftime('%m%d')}.csv"
-            st.session_state.result_msg = f"🎉 处理完成！符合日期且匹配达人的数据共计： {len(final_combined_df)} 条。"
+            st.session_state.result_msg = f"🎉 处理完成！符合条件的数据共计： {len(final_combined_df)} 条。"
             st.session_state.result_status = 'success'
         else:
             st.session_state.processed_csv = None
@@ -197,6 +221,17 @@ if uploaded_files and start_date <= end_date:
 # --- 5. 结果展示与下载 ---
 if st.session_state.result_status == 'success':
     st.success(st.session_state.result_msg)
+    
+    # === 新增：在网页上美观地展示三大汇总指标 ===
+    st.subheader("📊 核心数据汇总")
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    # 使用 :, 自动添加千分位逗号，Sales 保留两位小数
+    metric_col1.metric("总点击量 (Clicks)", f"{st.session_state.total_clicks:,}")
+    metric_col2.metric("总订单数 (Orders)", f"{st.session_state.total_orders:,}")
+    metric_col3.metric("总销售额 (Sales)", f"${st.session_state.total_sales:,.2f}")
+    st.write("---")
+    # ==========================================
+    
     st.download_button(
         label="⬇️ 下载最终合并后的 CSV 文件",
         data=st.session_state.processed_csv,
