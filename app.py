@@ -15,10 +15,13 @@ if 'processed_csv' not in st.session_state:
     st.session_state.output_filename = ""
     st.session_state.result_msg = ""
     st.session_state.result_status = "" 
-    # 新增汇总数据的缓存
+    # 正向数据缓存
     st.session_state.total_clicks = 0
     st.session_state.total_orders = 0
     st.session_state.total_sales = 0.0
+    # 负向（退货）数据缓存
+    st.session_state.total_return_orders = 0
+    st.session_state.total_return_sales = 0.0
 
 # --- 1. 自定义时间选择器 ---
 st.subheader("1. 选择需要过滤的时间范围")
@@ -74,7 +77,7 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# 核心处理函数 (新增 log_area 参数用于在网页打印日志)
+# 核心处理函数
 def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_whitelist, log_area):
     encodings_to_try = ['utf-8', 'gbk', 'gb18030', 'utf-8-sig', 'latin1']
     df = None
@@ -126,11 +129,9 @@ def process_csv_bytes(file_bytes, display_name, start_ts, end_ts, creators_white
                 log_area.warning(f"⚠️ 跳过 {display_name}: 未找到 'Creator Name' 列。")
                 return None
 
-        # 整理最终返回的数据
         filtered_df['Source_File'] = display_name
         filtered_df = filtered_df.drop(columns=['Date_Parsed']) 
         
-        # 打印成功日志到网页面板
         log_area.success(f"✅ 提取成功: **{display_name}** (找到 **{len(filtered_df)}** 条数据)")
         return filtered_df
         
@@ -149,7 +150,6 @@ if uploaded_files and start_date <= end_date:
         status_text = st.empty()
         total_files = len(uploaded_files)
         
-        # 创建一个可折叠的日志展示区
         st.markdown("### 📋 详细处理日志")
         log_area = st.expander("点击查看文件扫描详情", expanded=True)
         
@@ -188,25 +188,26 @@ if uploaded_files and start_date <= end_date:
         if data_frames:
             final_combined_df = pd.concat(data_frames, ignore_index=True)
             
-            # === 新增：清理数据格式 ===
-            # 定义需要汇总的列名
+            # === 数据格式清理 ===
             summary_cols = ['Clicks', 'Orders', 'Sales']
             for col in summary_cols:
                 if col in final_combined_df.columns:
-                    # 使用正则只保留数字、小数点和负号，过滤掉美元符号和逗号，然后强制转为数字，无法转换的变为 NaN，最后补0
                     cleaned_col = final_combined_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
                     final_combined_df[col] = pd.to_numeric(cleaned_col, errors='coerce').fillna(0)
                 else:
-                    # 如果某列完全不存在，为了防止报错，补齐一列 0
                     final_combined_df[col] = 0
             
-            # === 修改点：只对大于 0 的正数进行求和（忽略负数） ===
-            # loc[条件, 列名] 可以精准筛选出符合条件的数据再求和
+            # === 分别计算正向数据与负向（退货）数据 ===
+            # 正数汇总（实际产生的量）
             st.session_state.total_clicks = int(final_combined_df.loc[final_combined_df['Clicks'] > 0, 'Clicks'].sum())
             st.session_state.total_orders = int(final_combined_df.loc[final_combined_df['Orders'] > 0, 'Orders'].sum())
             st.session_state.total_sales = float(final_combined_df.loc[final_combined_df['Sales'] > 0, 'Sales'].sum())
-            # ====================================================
             
+            # 负数汇总（退货量）。使用 abs() 取绝对值，转为正数方便直观展示
+            st.session_state.total_return_orders = int(abs(final_combined_df.loc[final_combined_df['Orders'] < 0, 'Orders'].sum()))
+            st.session_state.total_return_sales = float(abs(final_combined_df.loc[final_combined_df['Sales'] < 0, 'Sales'].sum()))
+            # ============================================
+
             csv_str = final_combined_df.to_csv(index=False)
             st.session_state.processed_csv = csv_str.encode('utf-8-sig')
             
@@ -222,15 +223,22 @@ if uploaded_files and start_date <= end_date:
 if st.session_state.result_status == 'success':
     st.success(st.session_state.result_msg)
     
-    # === 新增：在网页上美观地展示三大汇总指标 ===
     st.subheader("📊 核心数据汇总")
+    
+    # 将仪表盘分成两排，更清晰
+    st.markdown("##### 📈 正向业绩")
     metric_col1, metric_col2, metric_col3 = st.columns(3)
-    # 使用 :, 自动添加千分位逗号，Sales 保留两位小数
     metric_col1.metric("总点击量 (Clicks)", f"{st.session_state.total_clicks:,}")
     metric_col2.metric("总订单数 (Orders)", f"{st.session_state.total_orders:,}")
     metric_col3.metric("总销售额 (Sales)", f"${st.session_state.total_sales:,.2f}")
+    
+    st.markdown("##### 📉 退款/退货数据")
+    ret_col1, ret_col2, ret_col3 = st.columns(3)
+    # 第一列通常退货不看点击，所以只展示订单和金额
+    ret_col1.metric("总退货单数 (Return Orders)", f"{st.session_state.total_return_orders:,}")
+    ret_col2.metric("总退货金额 (Return Sales)", f"${st.session_state.total_return_sales:,.2f}")
+    
     st.write("---")
-    # ==========================================
     
     st.download_button(
         label="⬇️ 下载最终合并后的 CSV 文件",
